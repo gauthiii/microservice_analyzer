@@ -43,16 +43,30 @@ def save_to_json(data, filename):
     except Exception as e:
         print(f"Error saving JSON: {e}")
 
+def count_simple_tokens(filename):
+    try:
+        with open(filename, 'r', encoding='utf-8') as file:
+            contents = file.read()
+            # Split the content by whitespace and count the resulting items
+            tokens = contents.split()
+            print(f"Token count for {filename}: {len(tokens)}")
+    except FileNotFoundError:
+        print("Error: The file was not found.")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
 if __name__ == "__main__":
     # Settings
-    folders_to_skip = ['.git', '__pycache__', '.venv', 'myenv', 'node_modules']
+    folders_to_skip = ['.git', '__pycache__', '.venv', 'myenv', 'node_modules', '.DS_Store','dist', '.env']
     output_filename = 'directory_data.json'
     
     # 1. Get the data
-    results = get_directory_data('.', folders_to_skip)
+    results = get_directory_data('/Users/gauthamsmacbook/Apps/React Apps/Ashika_Portfolio', folders_to_skip)
     
     # 2. Save to JSON file
     save_to_json(results, output_filename)
     
     # 3. Optional: Print the dict to console to see it worked
     print(f"Total items indexed: {len(results)}")
+
+    count_simple_tokens(output_filename)
