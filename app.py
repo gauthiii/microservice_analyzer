@@ -11,7 +11,7 @@ from openai import OpenAI
 
 
 st.set_page_config(
-    page_title="AI Codebase Visualizer & Analyzer",
+    page_title="Codebase Visualizer & Analyzer",
     page_icon="✨",
     layout="wide",
 )
@@ -256,7 +256,7 @@ st.markdown(
 
     .tree-shell {
         overflow: auto;
-        max-height: 72vh;
+        max-height: 50vh;
         border: 1px solid var(--line);
         border-radius: 14px;
         background:
@@ -368,6 +368,12 @@ st.markdown(
         margin: 0.25rem 0 0.85rem;
         font-size: 0.86rem;
         font-weight: 700;
+    }
+
+    .context-note {
+        color: var(--muted);
+        font-size: 0.86rem;
+        margin: 0.85rem 0 0.35rem;
     }
 
     .analysis-copy {
@@ -497,7 +503,6 @@ def get_directory_data(target_directory, exclude_list):
     if not root.exists() or not root.is_dir():
         return None
 
-    # Using rglob to index everything recursively
     for item in root.rglob("*"):
         if any(ex in item.parts for ex in exclude_list):
             continue
@@ -512,7 +517,6 @@ def get_directory_data(target_directory, exclude_list):
             except Exception:
                 content = "<no content (unreadable/binary)>"
 
-        # Calculate relative path to build tree easier
         try:
             rel_path = item.relative_to(root)
         except ValueError:
@@ -542,7 +546,6 @@ def generate_html_tree(target_path, exclude_list):
     def build_nested_tree(dir_path):
         html_parts = ["<ul>"]
         try:
-            # Sort directories first, then files alphabetically
             items = sorted(
                 list(dir_path.iterdir()),
                 key=lambda x: (not x.is_dir(), x.name.lower()),
@@ -600,6 +603,21 @@ def render_skip_chips(folders_to_skip):
     )
 
 
+def get_context_file_options(target_directory, exclude_list):
+    root = Path(target_directory)
+    if not root.exists() or not root.is_dir():
+        return []
+
+    files = []
+    for item in root.rglob("*"):
+        if any(ex in item.parts for ex in exclude_list):
+            continue
+        if item.is_file():
+            files.append(str(item.relative_to(root)))
+
+    return sorted(files, key=str.lower)
+
+
 folders_to_skip = [
     ".git",
     "__pycache__",
@@ -646,7 +664,7 @@ st.markdown(
     """
 <div class="workbench-shell">
     <div class="app-kicker">Local codebase workbench</div>
-    <h1 class="app-title">AI Codebase Visualizer & Analyzer</h1>
+    <h1 class="app-title">Codebase Visualizer & Analyzer</h1>
     <p class="app-subtitle">
         Select a project folder, inspect the structure, and generate an architecture readout without leaving the workbench.
     </p>
@@ -686,11 +704,19 @@ if repo_path:
     elif not target.is_dir():
         st.error("The specified path is a file, not a directory.")
     else:
-        # Layout columns: Left for Tree View, Right for Analysis Response
-        col1, col2 = st.columns([1, 1.2], gap="large")
+        context_file_options = get_context_file_options(repo_path, folders_to_skip)
+        selection_key = f"context_files::{repo_path}"
+        if selection_key in st.session_state:
+            st.session_state[selection_key] = [
+                file_path
+                for file_path in st.session_state[selection_key]
+                if file_path in context_file_options
+            ]
 
-        with col1:
-            tree_panel = st.container(border=True)
+        # --- RE-ROUTED: Structural Layout rendered inside Sidebar ---
+        with st.sidebar:
+            st.markdown("---")
+            tree_panel = st.container()
             with tree_panel:
                 st.markdown(
                     "<div class='panel-title'><span class='panel-title-pill'>T</span>Structure Layout</div>",
@@ -698,89 +724,109 @@ if repo_path:
                 )
                 tree_html = generate_html_tree(repo_path, folders_to_skip)
                 st.markdown(tree_html, unsafe_allow_html=True)
-
-        with col2:
-            analysis_panel = st.container(border=True)
-            with analysis_panel:
                 st.markdown(
-                    "<div class='panel-title'><span class='panel-title-pill'>A</span>AI Analysis Actions</div>",
+                    "<p class='context-note'>Choose which files are included in the AI context.</p>",
                     unsafe_allow_html=True,
                 )
-                st.markdown(
-                    "<p class='analysis-copy'>Run a structured architecture pass over the visible project files.</p>",
-                    unsafe_allow_html=True,
-                )
+                select_col, clear_col = st.columns(2)
+                with select_col:
+                    if st.button("Select all", use_container_width=True):
+                        st.session_state[selection_key] = context_file_options
+                with clear_col:
+                    if st.button("Clear", use_container_width=True):
+                        st.session_state[selection_key] = []
 
-                # Sparkle Analyze Button
-                if st.button("✨ Analyze with AI", type="primary", use_container_width=True):
-                    # Fetch directory content JSON payload
-                    raw_data = get_directory_data(repo_path, folders_to_skip)
+                multiselect_config = {
+                    "label": "AI context files",
+                    "options": context_file_options,
+                    "key": selection_key,
+                    "label_visibility": "collapsed",
+                }
+                if selection_key not in st.session_state:
+                    multiselect_config["default"] = context_file_options
 
-                    if not raw_data:
-                        st.warning("No indexable code files found or error parsing layout.")
-                    else:
-                        # Clean up data payload size for the context window
-                        payload = [
-                            {"File": item["RelativePath"], "Content": item["Content"]}
-                            for item in raw_data
-                            if item["Type"] == "File"
-                        ]
+                selected_context_files = st.multiselect(**multiselect_config)
 
-                        # Exact execution mapping and explanation prompt guidelines
-                        system_prompt = (
-                            "You are an expert software architecture mapping assistant. "
-                            "Analyze the provided JSON code structure of this repository and deliver your report using the following structure:\n\n"
-                            "1. **Core Summary**: A crisp, maximum two-line explanation outlining exactly what the project is and what core problem it solves.\n"
-                            "2. **Project Purpose**: Briefly mention its high-level functionalities.\n"
-                            "3. **Execution Pipeline Order**: Clear step-by-step breakdown detailing the order in which the files execute when the app boots up or interacts (e.g., Entrypoints, configurations, components, routing).\n"
-                            "4. **Onboarding Guide**: Explicit, logical order a developer should read through this codebase file-by-file to comprehend it cleanly."
-                        )
+        # --- Main Screen Panel: Expanded Full-Width Layout Area ---
+        analysis_panel = st.container(border=True)
+        with analysis_panel:
+            st.markdown(
+                "<div class='panel-title'><span class='panel-title-pill'>A</span>AI Analysis Actions</div>",
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                "<p class='analysis-copy'>Run a structured architecture pass over the visible project files.</p>",
+                unsafe_allow_html=True,
+            )
 
-                        user_content = f"Here is the project repository data payload containing file paths and text bodies:\n\n{json.dumps(payload, indent=2)}"
+            # Sparkle Analyze Button
+            if st.button("✨ Analyze with AI", type="primary", use_container_width=True):
+                raw_data = get_directory_data(repo_path, folders_to_skip)
 
-                        with st.spinner(f"Processing codebase data with {selected_model}..."):
-                            try:
-                                response_text = ""
+                if not raw_data:
+                    st.warning("No indexable code files found or error parsing layout.")
+                elif not selected_context_files:
+                    st.warning("Select at least one file from Structure Layout before analyzing.")
+                else:
+                    selected_context_set = set(selected_context_files)
+                    payload = [
+                        {"File": item["RelativePath"], "Content": item["Content"]}
+                        for item in raw_data
+                        if item["Type"] == "File"
+                        and item["RelativePath"] in selected_context_set
+                    ]
 
-                                # Execution via OpenAI
-                                if "gpt-5.4-mini" in selected_model:
-                                    if not st.session_state.get("OPENAI_API_KEY"):
-                                        st.error("Missing OpenAI API Key in the sidebar.")
-                                    else:
-                                        client = OpenAI(api_key=st.session_state["OPENAI_API_KEY"])
-                                        completion = client.chat.completions.create(
-                                            model="gpt-5.4-mini",
-                                            messages=[
-                                                {"role": "system", "content": system_prompt},
-                                                {"role": "user", "content": user_content},
-                                            ],
-                                        )
-                                        response_text = completion.choices[0].message.content
+                    system_prompt = (
+                        "You are an expert software architecture mapping assistant. "
+                        "Analyze the provided JSON code structure of this repository and deliver your report using the following structure:\n\n"
+                        "1. **Core Summary**: A crisp, maximum two-line explanation outlining exactly what the project is and what core problem it solves.\n"
+                        "2. **Project Purpose**: Briefly mention its high-level functionalities.\n"
+                        "3. **Execution Pipeline Order**: Clear step-by-step breakdown detailing the order in which the files execute when the app boots up or interacts (e.g., Entrypoints, configurations, components, routing).\n"
+                        "4. **Onboarding Guide**: Explicit, logical order a developer should read through this codebase file-by-file to comprehend it cleanly."
+                    )
 
-                                # Execution via Anthropic
-                                elif "claude-haiku-4-5" in selected_model:
-                                    if not st.session_state.get("ANTHROPIC_API_KEY"):
-                                        st.error("Missing Anthropic API Key in the sidebar.")
-                                    else:
-                                        client = Anthropic(api_key=st.session_state["ANTHROPIC_API_KEY"])
-                                        message = client.messages.create(
-                                            model="claude-haiku-4-5",
-                                            max_tokens=4000,
-                                            system=system_prompt,
-                                            messages=[
-                                                {"role": "user", "content": user_content}
-                                            ],
-                                        )
-                                        response_text = message.content[0].text
+                    user_content = f"Here is the project repository data payload containing file paths and text bodies:\n\n{json.dumps(payload, indent=2)}"
 
-                                # Render output beautifully if fetched
-                                if response_text:
-                                    st.success("Analysis Complete!")
-                                    st.markdown("---")
-                                    st.markdown(response_text)
+                    with st.spinner(f"Processing codebase data with {selected_model}..."):
+                        try:
+                            response_text = ""
 
-                            except Exception as e:
-                                st.error(f"API Error occurred during structural inference: {str(e)}")
+                            if "gpt-5.4-mini" in selected_model:
+                                if not st.session_state.get("OPENAI_API_KEY"):
+                                    st.error("Missing OpenAI API Key in the sidebar.")
+                                else:
+                                    client = OpenAI(api_key=st.session_state["OPENAI_API_KEY"])
+                                    completion = client.chat.completions.create(
+                                        model="gpt-5.4-mini",
+                                        messages=[
+                                            {"role": "system", "content": system_prompt},
+                                            {"role": "user", "content": user_content},
+                                        ],
+                                    )
+                                    response_text = completion.choices[0].message.content
+
+                            elif "claude-haiku-4-5" in selected_model:
+                                if not st.session_state.get("ANTHROPIC_API_KEY"):
+                                    st.error("Missing Anthropic API Key in the sidebar.")
+                                else:
+                                    client = Anthropic(api_key=st.session_state["ANTHROPIC_API_KEY"])
+                                    message = client.messages.create(
+                                        model="claude-haiku-4-5",
+                                        max_tokens=4000,
+                                        system=system_prompt,
+                                        messages=[
+                                            {"role": "user", "content": user_content}
+                                        ],
+                                    )
+                                    response_text = message.content[0].text
+
+                            if response_text:
+                                st.success("Analysis Complete!")
+                                st.markdown("---")
+                                st.markdown(response_text)
+
+                        except Exception as e:
+                            st.error(f"API Error occurred during structural inference: {str(e)}")
 else:
     st.markdown(
         "<div class='empty-state'>Paste an absolute path or use Browse to initialize the project tree.</div>",
